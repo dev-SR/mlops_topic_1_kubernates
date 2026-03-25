@@ -10,7 +10,7 @@ dependencies = [
     "exceptiongroup==1.1.1",
     "fastapi==0.95.2",
     "h11==0.14.0",
-    "httpx>=0.28.1",
+    "httpx==0.23.3",
     "idna==3.4",
     "numpy==1.25.0",
     "prometheus-client==0.17.0",
@@ -22,5 +22,5 @@ dependencies = [
     "starlette==0.27.0",
     "starlette-exporter==0.16.0",
     "typing-extensions==4.6.3",
-    "uvicorn==0.22.0",
+    "uvicorn[standard]==0.22.0",
 ]

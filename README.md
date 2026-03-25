@@ -10,7 +10,7 @@ uv add -r requirements.txt
 uv run uvicorn main:app --proxy-headers --host 0.0.0.0 --port 8083 
 ```
 
-2. Docker Build
+## Docker Build
 
 ```bash
 docker build . -t hello-joker:v1
@@ -22,7 +22,7 @@ docker tag hello-joker:v1 <dockerhub-user-name>/hello-joker:v1
 docker push <docker_username>/hello-joker:v1
 ```
 
-3.  Kubernetes
+## Kubernetes
 
 ```bash
 # kubectl create -f pod.yaml   
@@ -65,7 +65,7 @@ Ohter objects:
 kubectl create namespace funny
 ```
 
-helm chart:
+## helm chart
 
 Let us now create a similar chart for our joker-application. We do that by running
 
@@ -92,5 +92,72 @@ Once the values are modified we can try installing this chart *in namespace funn
 
 ```bash
 helm install hello-joker --generate-name -n funny
+helm upgrade hello-joker ./k8s -n funny
+```
+
+Your chart is located at `k8s/hello-joker`. Here’s the step-by-step workflow for Helm with a **custom chart**.
+
+---
+
+1. Install the chart in a namespace
+
+Let’s say the namespace is `funny` and release name is `hello-joker`.
+
+```bash
+helm install hello-joker k8s/hello-joker -n funny --create-namespace
+```
+
+Explanation:
+
+* `hello-joker` → release name (your deployment instance)
+* `k8s/hello-joker` → path to your chart
+* `-n funny` → namespace
+* `--create-namespace` → creates `funny` if it doesn’t exist
+
+---
+
+```bash
 kubectl get all -n funny
 ```
+
+This shows all resources created by the Helm release in the `funny` namespace.
+
+
+2. Update the chart after changing `values.yaml`
+
+```yml
+# This sets the container image more information can be found here: https://kubernetes.io/docs/concepts/containers/images/
+image:
+  repository: devhellosr/hello-joker
+#   ....
+service:
+  # This sets the ports more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#field-spec-ports
+  port: 8083
+```
+
+If you changed anything in `k8s/hello-joker/values.yaml`:
+
+```bash
+helm upgrade hello-joker k8s/hello-joker -n funny
+```
+
+Explanation:
+
+* `upgrade` → applies updates without uninstalling
+<!-- * `-f values.yaml` → uses your modified values -->
+
+Optional: check the status after upgrade:
+
+```bash
+helm status hello-joker -n funny
+```
+
+---
+
+3. Delete the chart (uninstall release)
+
+```bash
+helm uninstall hello-joker -n funny
+```
+
+This removes all resources created by this Helm release in the `funny` namespace.
