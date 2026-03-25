@@ -39,6 +39,7 @@ kubectl get deployments
 kubectl describe deployment joker-deployment    
 kubectl logs joker-deployment-xxxxxxx-xxxxxx
 kubectl delete deployment joker-deployment  
+kubectl delete -f deployment.yaml
 
 #Networking And Services
 kubectl apply -f node-port-service.yaml 
@@ -56,4 +57,40 @@ curl http://<CLUSTER-IP>:80
 kubectl apply -f loadbalancer-service.yaml     
 # We can see that the load balancer service has an external IP (localhost for dd) associated with it.
 http://localhost:30000
+```
+
+Ohter objects:
+
+```bash
+kubectl create namespace funny
+```
+
+helm chart:
+
+Let us now create a similar chart for our joker-application. We do that by running
+
+```bash
+helm create hello-joker
+```
+
+We can see multiple configurations in the **values.yaml** file. We *must* modify only those configurations for *deployments* and *services*.
+This involves the replicaCount, image-related information, and specifying the service type and port.
+
+```yaml
+replicaCount: 3
+image:
+	repository: varunmallya/hello-joker
+	pullPolicy: IfNotPresent
+	tag: v1
+..
+service:
+	type: NodePort
+	port: 8080
+```
+
+Once the values are modified we can try installing this chart *in namespace funny* by using the Helm install command
+
+```bash
+helm install hello-joker --generate-name -n funny
+kubectl get all -n funny
 ```
