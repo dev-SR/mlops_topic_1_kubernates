@@ -144,6 +144,15 @@ volumeMounts: []
 #   mountPath: "/etc/foo"
 #   readOnly: true
 
+# Inject pod identity via the Kubernetes Downward API.
+# fieldRef lets the pod read its own metadata without any extra permissions —
+# Kubernetes fills in the value at scheduling time, before the container starts.
+env:
+  - name: POD_NAME
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.name
+
 nodeSelector: {}
 tolerations: []
 affinity: {}
