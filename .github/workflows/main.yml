@@ -159,7 +159,7 @@ jobs:
   #        Pull requests → Read and Write  (open the PR)
   #   6. Generate and copy the token (shown once only)
   #   7. GitHub repo → Settings → Secrets and variables → Actions:
-  #      GH_PAT = the fine-grained token you just created
+  #      GH_TOKEN = the fine-grained token you just created
   # ───────────────────────────────────────────────────────────────────────────
   update:
     runs-on: ubuntu-latest
@@ -172,14 +172,14 @@ jobs:
       contents: none
 
     steps:
-      # Checks out the repo using GH_PAT so that the create-pull-request
+      # Checks out the repo using GH_TOKEN so that the create-pull-request
       # action later can push the new branch and open the PR with the same
       # token, regardless of whether this is the app repo or a separate
       # GitOps repo (just change the 'repository' field below when you split).
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GH_PAT }}
+          token: ${{ secrets.GH_TOKEN }}
           # When moving to a separate GitOps repo, change this to:
           # repository: your-org/your-gitops-repo
 
