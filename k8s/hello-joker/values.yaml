@@ -155,3 +155,9 @@ env:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+serviceMonitor:
+  enabled: true
+  prometheusRelease: prometheus # must match your helm release name for kube-prometheus-stack
+  namespace: '' # defaults to app namespace (funny)
+  interval: 15s
+  scrapeTimeout: 10s
