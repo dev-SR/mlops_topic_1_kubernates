@@ -1,125 +1,234 @@
 name: CI Pipeline
 
+# ─────────────────────────────────────────────────────────────────────────────
+# TRIGGER STRATEGY & LOOP PREVENTION
+#
+# Two independent guards ensure the workflow never re-triggers itself:
+#
+#   1. paths-ignore: k8s/**
+#      The Helm update PR only modifies files under k8s/.
+#      When that PR is merged to main, this workflow simply never fires
+#      because no tracked paths changed — no tricks, no hacks.
+#
+#   2. Fine-grained PAT (GH_PAT) instead of GITHUB_TOKEN
+#      GITHUB_TOKEN only works within the same repo.
+#      A fine-grained PAT scoped to the target repo works whether your
+#      Helm chart lives here or in a separate GitOps repo — future-proof
+#      by design. GitHub also does NOT trigger workflows on pushes made
+#      by fine-grained PATs when the committer is 'github-actions[bot]'.
+#
+# Together: paths-ignore handles the merge trigger, PAT handles portability.
+# ─────────────────────────────────────────────────────────────────────────────
 on:
   push:
     branches: ['main']
+    paths-ignore:
+      - 'k8s/**' # Helm chart updates must never re-trigger this pipeline
   pull_request:
     branches: ['main']
+    paths-ignore:
+      - 'k8s/**'
 
 env:
   IMAGE_NAME: devhellosr/hello-joker
 
+# Global least-privilege baseline.
+# Every job inherits read-only by default; only the jobs that truly need
+# more will declare their own permissions block.
+permissions:
+  contents: read
+
 jobs:
-  # =========================
-  # 1. TEST JOB
-  # =========================
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 1 — TEST
+  # Runs on every push to main and every PR so bugs are caught early.
+  # Skipped automatically when only k8s/** files change (paths-ignore above).
+  # ───────────────────────────────────────────────────────────────────────────
   test:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      # Pulls the full repo contents into the runner so subsequent steps
+      # have access to source code, requirements.txt, and test files.
+      - name: Checkout source code
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      # Installs the exact Python version the app targets.
+      # Using a pinned version string avoids surprises when GitHub bumps
+      # the default Python on their runners.
+      - name: Set up Python 3.10
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
+      # Installs all runtime and test dependencies declared in requirements.txt.
+      # If this fails (missing package, bad version), the job stops here
+      # before wasting time running tests.
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
+      # Runs the full test suite. A non-zero exit code fails the job and
+      # blocks the build & update jobs from running downstream.
       - name: Run tests
         run: pytest
 
-  # =========================
-  # 2. BUILD & PUSH DOCKER IMAGE
-  # =========================
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 2 — BUILD & PUSH DOCKER IMAGE
+  # Only runs after tests pass and only on direct pushes to main.
+  # PR builds are intentionally excluded — we don't publish unreviewed images.
+  # ───────────────────────────────────────────────────────────────────────────
   build:
     runs-on: ubuntu-latest
     needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    # Expose the computed SHA so the update job can consume it
+    # without re-computing it independently.
+    outputs:
+      sha_short: ${{ steps.vars.outputs.SHA_SHORT }}
 
     steps:
-      - name: Checkout code
+      - name: Checkout source code
         uses: actions/checkout@v4
 
-      - name: Extract short SHA
+      # Slices the full 40-character commit SHA to 8 characters for use as
+      # the Docker image tag and Helm values update. Short enough to be
+      # readable in logs and UIs, unique enough for any practical use.
+      - name: Compute short SHA
         id: vars
         run: echo "SHA_SHORT=${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
 
+      # Enables Docker BuildKit via buildx, which unlocks layer caching,
+      # multi-platform builds, and better build performance overall.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to Docker Hub
+      # Authenticates against Docker Hub using a Personal Access Token (PAT).
+      # Never use your Docker Hub password directly in CI — PATs can be
+      # scoped, rotated, and revoked independently.
+      #
+      # Setup (one-time):
+      #   1. hub.docker.com → Account Settings → Personal Access Tokens
+      #   2. Create a token with Read & Write scope, give it a name like
+      #      "github-actions-ci" so you know what it's for
+      #   3. GitHub repo → Settings → Secrets and variables → Actions:
+      #      DOCKER_USERNAME = your Docker Hub username (e.g. devhellosr)
+      #      DOCKER_TOKEN    = the PAT you just created
+      - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKER_USERNAME }} # Your Docker Hub username
-          password: ${{ secrets.DOCKER_TOKEN }} # Your Docker Hub Personal Access Token
-        # How to set DOCKER_USERNAME and DOCKER_TOKEN:
-        # 1. Go to https://hub.docker.com/settings/security
-        # 2. Create a Personal Access Token (PAT) with 'Read & Write' permissions
-        # 3. Give it a descriptive name (e.g., 'GitHub Actions CI') and copy the token
-        # 4. In GitHub: Repository → Settings → Secrets → Actions → New repository secret
-        #    - Name: DOCKER_USERNAME → your Docker Hub username
-        #    - Name: DOCKER_TOKEN → the token you just created
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
 
-      - name: Build and Push Image
-        uses: docker/build-push-action@v5
+      # Builds the Docker image from the repo root (context: .) and pushes it
+      # to Docker Hub tagged with the short SHA.
+      # GHA layer caching (cache-from/cache-to) reuses unchanged layers across
+      # runs, significantly reducing build time for large images.
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           tags: ${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.SHA_SHORT }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-  # =========================
-  # 3. UPDATE HELM CHART & OPEN PR
-  # =========================
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 3 — OPEN HELM UPDATE PULL REQUEST
+  #
+  # Patches the image tag in values.yaml and opens a PR on a short-lived
+  # branch (helm-update/<sha>). Never commits directly to main.
+  #
+  # WHY A FINE-GRAINED PAT (GH_PAT) INSTEAD OF GITHUB_TOKEN:
+  #   GITHUB_TOKEN is repo-scoped and expires with the run — it cannot
+  #   push to a different repository. If you later move your Helm chart to
+  #   a dedicated GitOps repo (the standard ArgoCD/Flux pattern), you would
+  #   need to change the token anyway. Using a fine-grained PAT now means
+  #   zero workflow changes when you make that split — just update the secret
+  #   to target the new repo.
+  #
+  # Setup (one-time):
+  #   1. GitHub → Settings → Developer settings →
+  #      Personal access tokens → Fine-grained tokens → Generate new token
+  #   2. Set expiration (90 days recommended; calendar-remind yourself to rotate)
+  #   3. Resource owner: your user or org
+  #   4. Repository access: select ONLY the target repo
+  #      (this repo now; your GitOps repo later)
+  #   5. Permissions → Repository permissions:
+  #        Contents      → Read and Write  (push the branch)
+  #        Pull requests → Read and Write  (open the PR)
+  #   6. Generate and copy the token (shown once only)
+  #   7. GitHub repo → Settings → Secrets and variables → Actions:
+  #      GH_PAT = the fine-grained token you just created
+  # ───────────────────────────────────────────────────────────────────────────
   update:
     runs-on: ubuntu-latest
     needs: build
 
+    # Even though GH_PAT handles auth, explicitly dropping all permissions
+    # for GITHUB_TOKEN on this job follows the least-privilege principle
+    # and prevents accidental token misuse.
+    permissions:
+      contents: none
+
     steps:
-      - name: Checkout repo (for Helm chart update)
+      # Checks out the repo using GH_PAT so that the create-pull-request
+      # action later can push the new branch and open the PR with the same
+      # token, regardless of whether this is the app repo or a separate
+      # GitOps repo (just change the 'repository' field below when you split).
+      - name: Checkout repo
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GH_TOKEN }}
-        # How to set GH_TOKEN:
-        # 1. Go to GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens
-        #    Link: https://github.com/settings/tokens
-        # 2. Click 'Generate new token' → select repository 'dev-SR/MLOP-proj1'
-        # 3. Grant 'Read & Write' permissions on repository contents
-        # 4. Copy the token (you will only see it once)
-        # 5. In your GitHub repository: Settings → Secrets → Actions → New repository secret
-        #    - Name: GH_TOKEN
-        #    - Value: the personal access token
+          token: ${{ secrets.GH_PAT }}
+          # When moving to a separate GitOps repo, change this to:
+          # repository: your-org/your-gitops-repo
 
-      - name: Extract short SHA
-        id: vars
-        run: echo "SHA_SHORT=${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
-
+      # yq is a portable YAML processor used to surgically update a single
+      # field in values.yaml without reformatting or corrupting the rest of
+      # the file (unlike sed, which operates on raw text).
+      # Version is pinned so runner updates can't silently break the syntax.
       - name: Install yq
         run: |
-          sudo wget https://github.com/mikefarah/yq/releases/download/v4.2.0/yq_linux_amd64 -O /usr/bin/yq
+          sudo wget -q \
+            https://github.com/mikefarah/yq/releases/download/v4.44.2/yq_linux_amd64 \
+            -O /usr/bin/yq
           sudo chmod +x /usr/bin/yq
 
-      - name: Update Helm values
+      # Overwrites only the .image.tag field in values.yaml with the short SHA
+      # built in the previous job. All other fields in the file are untouched.
+      - name: Patch image tag in Helm values
         run: |
-          git checkout -b helm-update || git checkout helm-update
-          yq e -i ".image.tag = \"${{ steps.vars.outputs.SHA_SHORT }}\"" k8s/hello-joker/values.yaml
+          yq e -i ".image.tag = \"${{ needs.build.outputs.sha_short }}\"" \
+            k8s/hello-joker/values.yaml
 
-      - name: Commit and Push
-        run: |
-          git config user.email "ci@github.com"
-          git config user.name "github-actions"
-          git add k8s/hello-joker/values.yaml
-          git commit -m "Update helm chart ${{ steps.vars.outputs.SHA_SHORT }}" || echo "No changes"
-          git push origin helm-update --force
-
-      - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v5
+      # Creates a branch named helm-update/<sha>, commits the values.yaml
+      # change, and opens a PR against main — all in one action.
+      #
+      # Key behaviours:
+      #   - If a PR for this branch already exists, it updates it (idempotent).
+      #   - delete-branch: true removes the branch automatically after merge,
+      #     keeping the repo branch list clean.
+      #   - The PR title and body give reviewers full context without having
+      #     to trace back through workflow logs.
+      - name: Open Helm update pull request
+        uses: peter-evans/create-pull-request@v7
         with:
-          branch: helm-update
-          base: main
-          title: 'Automated Helm chart update ${{ steps.vars.outputs.SHA_SHORT }}'
-          body: 'This PR updates Helm chart values.yaml with the latest Docker image tag.'
-          labels: automated
-          commit-message: 'Automated Helm chart update ${{ steps.vars.outputs.SHA_SHORT }}'
+          token: ${{ secrets.GH_PAT }}
+          branch: helm-update/${{ needs.build.outputs.sha_short }}
+          commit-message: 'ci: update helm chart tag ${{ needs.build.outputs.sha_short }}'
+          title: 'ci: update helm chart tag ${{ needs.build.outputs.sha_short }}'
+          body: |
+            ## Automated Helm image tag update
+
+            | Field   | Value |
+            |---------|-------|
+            | Image   | `${{ env.IMAGE_NAME }}:${{ needs.build.outputs.sha_short }}` |
+            | Commit  | ${{ github.sha }} |
+            | Triggered by | @${{ github.actor }} |
+
+            ---
+            > Merging this PR will **not** re-trigger the CI pipeline.
+            > Only files under `k8s/` are modified, which is excluded
+            > from the workflow trigger via `paths-ignore`.
+          labels: helm, automated
+          delete-branch: true
