@@ -163,36 +163,6 @@ helm uninstall hello-joker -n funny
 This removes all resources created by this Helm release in the `funny` namespace.
 
 
-<!-- 
-argocd login localhost:8443 \
-  --username admin \
-  --password nEe6cNeftJfg5B8S \
-  --insecure  
-  
-  
-  
-argocd repo add https://github.com/dev-SR/MLOP-proj1.git \
-  --username dev-SR \
-  --password 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
-  
-  
-check https://localhost:8443/settings/repos
-
-
-argocd app create hello-joker \
-  --repo https://github.com/dev-SR/MLOP-proj1.git \
-  --path k8s/hello-joker \
-  --dest-server https://kubernetes.default.svc \
-  --dest-namespace funny \
-  --sync-policy automated \
-  --auto-prune \
-  --self-heal
-  
-  
-  kubectl get svc -n funny
-  for i in {1..9}; do curl -s http://localhost:32553 | python3 -m json.tool; done
-  kubectl port-forward svc/hello-joker -n funny 8081:8083  -->
-  
 ## ArgoCD
 
 
