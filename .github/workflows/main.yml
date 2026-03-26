@@ -105,7 +105,7 @@ jobs:
 
       - name: Update Helm values
         run: |
-          yq e -i ".image.tag = \"${{ steps.vars.outputs.SHA_SHORT }}\"" hello-joker/values.yaml
+          yq e -i ".image.tag = \"${{ steps.vars.outputs.SHA_SHORT }}\"" k8s/hello-joker/values.yaml
 
       - name: Commit and Push
         run: |
