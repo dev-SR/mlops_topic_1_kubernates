@@ -1,5 +1,4 @@
 name: CI Pipeline
-
 on:
   push:
     branches: ['main']
@@ -9,51 +8,40 @@ on:
   pull_request:
     branches: ['main']
     types: [opened, synchronize, reopened]
-
 env:
   IMAGE_NAME: devhellosr/hello-joker
-
 jobs:
   # =========================
   # 1. TEST JOB
   # =========================
   test:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-
       - name: Run tests
         run: pytest
-
   # =========================
   # 2. BUILD & PUSH DOCKER IMAGE
   # =========================
   build:
     runs-on: ubuntu-latest
     needs: test
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
       - name: Extract short SHA
         id: vars
         run: echo "SHA_SHORT=${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
@@ -66,21 +54,18 @@ jobs:
         # 4. In GitHub: Repository → Settings → Secrets → Actions → New repository secret
         #    - Name: DOCKER_USERNAME → your Docker Hub username
         #    - Name: DOCKER_TOKEN → the token you just created
-
       - name: Build and Push Image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
           tags: ${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.SHA_SHORT }}
-
   # =========================
   # 3. UPDATE HELM CHART & OPEN PR
   # =========================
   update:
     runs-on: ubuntu-latest
     needs: build
-
     steps:
       - name: Checkout repo (for Helm chart update)
         uses: actions/checkout@v4
@@ -95,21 +80,17 @@ jobs:
         # 5. In your GitHub repository: Settings → Secrets → Actions → New repository secret
         #    - Name: GH_TOKEN
         #    - Value: the personal access token
-
       - name: Extract short SHA
         id: vars
         run: echo "SHA_SHORT=${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
-
       - name: Install yq
         run: |
           sudo wget https://github.com/mikefarah/yq/releases/download/v4.2.0/yq_linux_amd64 -O /usr/bin/yq
           sudo chmod +x /usr/bin/yq
-
       - name: Update Helm values
         run: |
           git checkout -b helm-update || git checkout helm-update
           yq e -i ".image.tag = \"${{ steps.vars.outputs.SHA_SHORT }}\"" k8s/hello-joker/values.yaml
-
       - name: Commit and Push
         run: |
           git config user.email "ci@github.com"
@@ -117,7 +98,6 @@ jobs:
           git add k8s/hello-joker/values.yaml
           git commit -m "Update helm chart ${{ steps.vars.outputs.SHA_SHORT }}" || echo "No changes"
           git push origin helm-update --force
-
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v5
         with:
@@ -127,3 +107,5 @@ jobs:
           body: 'This PR updates Helm chart values.yaml with the latest Docker image tag.'
           labels: automated
           commit-message: 'Automated Helm chart update ${{ steps.vars.outputs.SHA_SHORT }}'
+image:
+  tag: "54118366"
