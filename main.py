@@ -13,4 +13,4 @@ POD_NAME = os.getenv("POD_NAME", "unknown-pod")
 @app.get("/")
 async def root():
     random_joke = pyjokes.get_joke("en", "neutral")
-    return {"pod": POD_NAME, "random_joke": random_joke}
+    return {"pod": f"Response from :{POD_NAME}", "random_joke": random_joke}
