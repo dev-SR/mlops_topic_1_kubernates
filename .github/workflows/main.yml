@@ -111,6 +111,6 @@ jobs:
         run: |
           git config user.email "ci@github.com"
           git config user.name "github-actions"
-          git add hello-joker/values.yaml
+          git add k8s/hello-joker/values.yaml
           git commit -m "Update helm chart ${{ steps.vars.outputs.SHA_SHORT }}" || echo "No changes"
           git push
