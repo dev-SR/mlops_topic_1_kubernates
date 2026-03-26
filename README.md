@@ -566,77 +566,260 @@ argocd app delete hello-joker --cascade
 
 ---
 
-## Troubleshooting
-
-**ArgoCD synced but pods still show old image**
-
-```bash
-argocd app manifests hello-joker | grep image:
-```
-
-If this shows `v1` instead of a SHA, you created the app with `--helm-set image.tag=v1`.
-That flag permanently overrides `values.yaml`. Fix it:
-
-```bash
-argocd app create hello-joker \
-  --repo https://github.com/<your-org>/<your-repo>.git \
-  --path k8s/hello-joker \
-  --dest-server https://kubernetes.default.svc \
-  --dest-namespace funny \
-  --sync-policy automated \
-  --auto-prune \
-  --self-heal \
-  --upsert
-argocd app sync hello-joker
-```
-
-**`cannot lock ref` error in CI (branch push fails)**
-
-A plain branch named `helm-update` or `helm` exists and blocks the nested branch name.
-Delete it:
-
-```bash
-git push origin --delete helm-update   # or: helm
-```
-
-Then re-run the failed workflow job.
-
-**Auto-sync didn't fire after merging the Helm PR**
-
-ArgoCD polls every 3 minutes — there's a delay. Force it immediately:
-
-```bash
-argocd app sync hello-joker
-```
-
-For zero-delay sync in production, add a GitHub webhook pointing at your ArgoCD server.
-This isn't possible locally (GitHub can't reach your laptop).
-
-**Port-forward keeps disconnecting**
-
-It doesn't survive terminal close or sleep. Just re-run it:
-
-```bash
-kubectl port-forward svc/argocd-server -n argocd 8443:443
-```
-
-**Image pull error (ErrImagePull / ImagePullBackOff)**
-
-```bash
-kubectl describe pod -n funny <pod-name> | grep -A5 Events
-```
-
-The tag in `values.yaml` probably doesn't exist on Docker Hub yet — check
-`https://hub.docker.com/r/devhellosr/hello-joker/tags` and confirm the SHA is there.
+## Prometheus + Grafana Setup
+> Observability for hello-joker on Docker Desktop Kubernetes
 
 ---
 
-## Summary — what runs where
+### How it works
 
-| Component             | Namespace     | How to access                                                                |
-| --------------------- | ------------- | ---------------------------------------------------------------------------- |
-| Your app (3 replicas) | `funny`       | `curl http://localhost:<nodeport>` or `port-forward svc/hello-joker`         |
-| ArgoCD UI             | `argocd`      | `port-forward svc/argocd-server -n argocd 8443:443` → https://localhost:8443 |
-| ArgoCD CLI            | your machine  | `argocd app list` etc.                                                       |
-| Docker image          | Docker Hub    | `devhellosr/hello-joker:<sha>`                                               |
-| Desired state         | GitHub `k8s/` | Updated automatically by CI on every push to `main`                          |
+```
+hello-joker pods
+  └── GET /metrics          ← exposed by prometheus-fastapi-instrumentator
+
+ServiceMonitor (CRD)
+  └── selects hello-joker Service by label
+  └── tells Prometheus Operator: "scrape these pods every 15s"
+
+Prometheus
+  └── reads ServiceMonitor → scrapes /metrics → stores time-series data
+
+Grafana
+  └── queries Prometheus via PromQL → renders dashboards
+```
+
+The key piece is the **ServiceMonitor** — it's a Kubernetes custom resource installed
+by `kube-prometheus-stack`. Instead of editing Prometheus config files manually,
+you declare a ServiceMonitor and the Prometheus Operator picks it up automatically.
+
+---
+
+### Part 1 — Update the app
+
+#### 1a. Add the instrumentator to requirements.txt
+
+```
+prometheus-fastapi-instrumentator
+```
+
+#### 1b. Update main.py
+
+```python
+import os
+from fastapi import FastAPI
+import pyjokes
+from prometheus_fastapi_instrumentator import Instrumentator
+
+app = FastAPI()
+
+POD_NAME = os.getenv("POD_NAME", "unknown-pod")
+
+# Exposes /metrics with standard HTTP metrics automatically.
+# Metrics: http_requests_total, http_request_duration_seconds,
+#          http_request_size_bytes, http_response_size_bytes
+Instrumentator().instrument(app).expose(app)
+
+
+@app.get("/")
+async def root():
+    random_joke = pyjokes.get_joke("en", "neutral")
+    return {
+        "pod": POD_NAME,
+        "random_joke": random_joke,
+    }
+```
+
+Test it locally before pushing:
+
+```bash
+uv run uvicorn main:app --host 0.0.0.0 --port 8083
+curl http://localhost:8083/metrics
+# You should see lines like:
+# http_requests_total{handler="/",method="GET",status="2xx"} 1.0
+```
+
+---
+
+### Part 2 — Add the ServiceMonitor Helm template
+
+Create `k8s/hello-joker/templates/servicemonitor.yaml`:
+
+```yaml
+{{- if .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "hello-joker.fullname" . }}
+  namespace: {{ .Values.serviceMonitor.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "hello-joker.labels" . | nindent 4 }}
+    # Must match kube-prometheus-stack's serviceMonitorSelector.
+    # The default selector is: matchLabels: {release: prometheus}
+    release: {{ .Values.serviceMonitor.prometheusRelease | default "prometheus" }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      {{- include "hello-joker.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.serviceMonitor.interval | default "15s" }}
+      scrapeTimeout: {{ .Values.serviceMonitor.scrapeTimeout | default "10s" }}
+{{- end }}
+```
+
+---
+
+### Part 3 — Add serviceMonitor to values.yaml
+
+Add this block to the bottom of `k8s/hello-joker/values.yaml`:
+
+```yaml
+serviceMonitor:
+  enabled: true
+  prometheusRelease: prometheus   # must match your helm release name for kube-prometheus-stack
+  namespace: ""                   # defaults to app namespace (funny)
+  interval: 15s
+  scrapeTimeout: 10s
+```
+
+Verify the template renders correctly:
+
+```bash
+helm template hello-joker k8s/hello-joker | grep -A20 "ServiceMonitor"
+```
+
+---
+
+### Part 4 — Install kube-prometheus-stack
+
+This single Helm chart installs Prometheus, Grafana, AlertManager, node exporters,
+and the Prometheus Operator (which reads ServiceMonitor CRDs) all at once.
+
+```bash
+# Add the community charts repo
+helm repo add prometheus-community \
+  https://prometheus-community.github.io/helm-charts
+helm repo update
+
+# Install into the monitoring namespace
+# Release name MUST be "prometheus" to match serviceMonitor.prometheusRelease in values.yaml
+helm install prometheus prometheus-community/kube-prometheus-stack \
+  --namespace monitoring \
+  --create-namespace \
+  --set grafana.adminPassword=admin123
+```
+
+Wait for all pods to be Running (~2-3 minutes):
+
+```bash
+kubectl get pods -n monitoring --watch
+```
+
+You'll see pods for: prometheus, grafana, alertmanager, kube-state-metrics, node-exporter, operator.
+
+---
+
+### Part 5 — Push and let ArgoCD sync
+
+```bash
+git add main.py \
+  requirements.txt \
+  k8s/hello-joker/templates/servicemonitor.yaml \
+  k8s/hello-joker/values.yaml
+
+git commit -m "feat: add prometheus metrics and servicemonitor"
+git push origin main
+```
+
+GitHub Actions will:
+1. Run tests
+2. Build and push new image with the instrumentator installed
+3. Open a Helm PR with the new image SHA
+
+Merge the PR, then sync ArgoCD:
+
+```bash
+argocd app sync hello-joker
+```
+
+Verify the ServiceMonitor was created:
+
+```bash
+kubectl get servicemonitor -n funny
+# NAME           AGE
+# hello-joker    30s
+```
+
+Verify Prometheus discovered the targets:
+
+```bash
+# Port-forward to the Prometheus UI
+kubectl port-forward svc/prometheus-kube-prometheus-prometheus -n monitoring 9090:9090
+```
+
+Open http://localhost:9090 → **Status → Targets**
+
+You should see `serviceMonitor/funny/hello-joker` with state `UP` for each pod.
+If it shows as `Unknown` or `Down`, check Part 7 Troubleshooting.
+
+---
+
+### Part 6 — Access Grafana and build a dashboard
+
+#### Access
+
+```bash
+kubectl port-forward svc/prometheus-grafana -n monitoring 3000:80
+```
+
+Open http://localhost:3000
+- Username: `admin`
+- Password: `admin123` (or whatever you set in `--set grafana.adminPassword`)
+
+#### Import the FastAPI dashboard
+
+The fastest way to get a useful dashboard is to import a pre-built one:
+
+1. In Grafana: click **Dashboards → Import**
+2. Enter dashboard ID: **17175** (FastAPI Observability)
+3. Click **Load**
+4. Select your Prometheus data source
+5. Click **Import**
+
+You'll immediately see request rate, latency percentiles, and error rate per endpoint.
+
+#### Key metrics to query manually (Explore → select Prometheus)
+
+```promql
+# Total requests per second across all pods
+rate(http_requests_total{job="hello-joker"}[1m])
+
+# Request rate broken down by pod (shows load balancing)
+rate(http_requests_total{job="hello-joker"}[1m]) by (pod)
+
+# 95th percentile latency
+histogram_quantile(0.95,
+  rate(http_request_duration_seconds_bucket{handler="/"}[5m])
+)
+
+# Error rate (non-2xx responses)
+rate(http_requests_total{job="hello-joker", status!~"2.."}[1m])
+
+# Requests per pod — confirms load is spread across your 3 replicas
+sum by (pod) (
+  increase(http_requests_total{job="hello-joker"}[5m])
+)
+```
+
+#### Generate some traffic to see the graphs fill in
+
+```bash
+# Hit the NodePort 200 times quickly
+for i in {1..200}; do curl -s http://localhost:<nodeport> > /dev/null; done
+```
+
+---
