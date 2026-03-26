@@ -213,7 +213,7 @@ jobs:
       - name: Open Helm update pull request
         uses: peter-evans/create-pull-request@v7
         with:
-          token: ${{ secrets.GH_PAT }}
+          token: ${{ secrets.GH_TOKEN }}
           branch: helm-update/${{ needs.build.outputs.sha_short }}
           commit-message: 'ci: update helm chart tag ${{ needs.build.outputs.sha_short }}'
           title: 'ci: update helm chart tag ${{ needs.build.outputs.sha_short }}'
