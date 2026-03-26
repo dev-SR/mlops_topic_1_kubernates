@@ -1,111 +1,161 @@
-name: CI Pipeline
-on:
-  push:
-    branches: ['main']
-    # Ignore Helm values.yaml to prevent workflow loop
-    paths-ignore:
-      - 'k8s/hello-joker/values.yaml'
-  pull_request:
-    branches: ['main']
-    types: [opened, synchronize, reopened]
-env:
-  IMAGE_NAME: devhellosr/hello-joker
-jobs:
-  # =========================
-  # 1. TEST JOB
-  # =========================
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-      - name: Run tests
-        run: pytest
-  # =========================
-  # 2. BUILD & PUSH DOCKER IMAGE
-  # =========================
-  build:
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      - name: Extract short SHA
-        id: vars
-        run: echo "SHA_SHORT=${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }} # Your Docker Hub username
-          password: ${{ secrets.DOCKER_TOKEN }} # Your Docker Hub Personal Access Token
-        # How to set DOCKER_USERNAME and DOCKER_TOKEN:
-        # 1. Go to https://hub.docker.com/settings/security
-        # 2. Create a Personal Access Token (PAT) with 'Read & Write' permissions
-        # 3. Give it a descriptive name (e.g., 'GitHub Actions CI') and copy the token
-        # 4. In GitHub: Repository → Settings → Secrets → Actions → New repository secret
-        #    - Name: DOCKER_USERNAME → your Docker Hub username
-        #    - Name: DOCKER_TOKEN → the token you just created
-      - name: Build and Push Image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: ${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.SHA_SHORT }}
-  # =========================
-  # 3. UPDATE HELM CHART & OPEN PR
-  # =========================
-  update:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: Checkout repo (for Helm chart update)
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GH_TOKEN }}
-        # How to set GH_TOKEN:
-        # 1. Go to GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens
-        #    Link: https://github.com/settings/tokens
-        # 2. Click 'Generate new token' → select repository 'dev-SR/MLOP-proj1'
-        # 3. Grant 'Read & Write' permissions on repository contents
-        # 4. Copy the token (you will only see it once)
-        # 5. In your GitHub repository: Settings → Secrets → Actions → New repository secret
-        #    - Name: GH_TOKEN
-        #    - Value: the personal access token
-      - name: Extract short SHA
-        id: vars
-        run: echo "SHA_SHORT=${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
-      - name: Install yq
-        run: |
-          sudo wget https://github.com/mikefarah/yq/releases/download/v4.2.0/yq_linux_amd64 -O /usr/bin/yq
-          sudo chmod +x /usr/bin/yq
-      - name: Update Helm values
-        run: |
-          git checkout -b helm-update || git checkout helm-update
-          yq e -i ".image.tag = \"${{ steps.vars.outputs.SHA_SHORT }}\"" k8s/hello-joker/values.yaml
-      - name: Commit and Push
-        run: |
-          git config user.email "ci@github.com"
-          git config user.name "github-actions"
-          git add k8s/hello-joker/values.yaml
-          git commit -m "Update helm chart ${{ steps.vars.outputs.SHA_SHORT }}" || echo "No changes"
-          git push origin helm-update --force
-      - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v5
-        with:
-          branch: helm-update
-          base: main
-          title: 'Automated Helm chart update ${{ steps.vars.outputs.SHA_SHORT }}'
-          body: 'This PR updates Helm chart values.yaml with the latest Docker image tag.'
-          labels: automated
-          commit-message: 'Automated Helm chart update ${{ steps.vars.outputs.SHA_SHORT }}'
+# Default values for hello-joker.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# This will set the replicaset count more information can be found here: https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/
+replicaCount: 3
+
+# This sets the container image more information can be found here: https://kubernetes.io/docs/concepts/containers/images/
 image:
-  tag: 2c66c9b6
+  repository: devhellosr/hello-joker
+  # This sets the pull policy for images.
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: 'v1'
+
+# This is for the secrets for pulling an image from a private repository more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
+imagePullSecrets: []
+# This is to override the chart name.
+nameOverride: ''
+fullnameOverride: ''
+
+# This section builds out the service account more information can be found here: https://kubernetes.io/docs/concepts/security/service-accounts/
+serviceAccount:
+  # Specifies whether a service account should be created.
+  create: true
+  # Automatically mount a ServiceAccount's API credentials?
+  automount: true
+  # Annotations to add to the service account.
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template.
+  name: ''
+
+# This is for setting Kubernetes Annotations to a Pod.
+# For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/
+podAnnotations: {}
+# This is for setting Kubernetes Labels to a Pod.
+# For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/
+podLabels: {}
+
+podSecurityContext: {}
+  # fsGroup: 2000
+
+securityContext: {}
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+  # runAsUser: 1000
+
+# This is for setting up a service more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/
+service:
+  # This sets the service type more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types
+  type: NodePort
+  # This sets the ports more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#field-spec-ports
+  port: 8083
+
+# This block is for setting up the ingress for more information can be found here: https://kubernetes.io/docs/concepts/services-networking/ingress/
+ingress:
+  enabled: false
+  className: ''
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # kubernetes.io/tls-acme: "true"
+  hosts:
+    - host: chart-example.local
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+  tls: []
+    # - secretName: chart-example-tls
+    #   hosts:
+    #     - chart-example.local
+
+# -- Expose the service via gateway-api HTTPRoute
+# Requires Gateway API resources and suitable controller installed within the cluster
+# (see: https://gateway-api.sigs.k8s.io/guides/)
+httpRoute:
+  # HTTPRoute enabled.
+  enabled: false
+  # HTTPRoute annotations.
+  annotations: {}
+  # Which Gateways this Route is attached to.
+  parentRefs:
+    - name: gateway
+      sectionName: http
+      # namespace: default
+  # Hostnames matching HTTP header.
+  hostnames:
+    - chart-example.local
+  # List of rules and filters applied.
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /headers
+  #   filters:
+  #   - type: RequestHeaderModifier
+  #     requestHeaderModifier:
+  #       set:
+  #       - name: My-Overwrite-Header
+  #         value: this-is-the-only-value
+  #       remove:
+  #       - User-Agent
+  # - matches:
+  #   - path:
+  #       type: PathPrefix
+  #       value: /echo
+  #     headers:
+  #     - name: version
+  #       value: v2
+
+resources: {}
+  # We usually recommend not to specify default resources and to leave this as a conscious
+  # choice for the user. This also increases chances charts run on environments with little
+  # resources, such as Minikube. If you do want to specify resources, uncomment the following
+  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+  # limits:
+  #   cpu: 100m
+  #   memory: 128Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+# This is to setup the liveness and readiness probes more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+livenessProbe:
+  httpGet:
+    path: /
+    port: http
+readinessProbe:
+  httpGet:
+    path: /
+    port: http
+
+# This section is for setting up autoscaling more information can be found here: https://kubernetes.io/docs/concepts/workloads/autoscaling/
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 100
+  targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
+
+# Additional volumes on the output Deployment definition.
+volumes: []
+  # - name: foo
+  #   secret:
+  #     secretName: mysecret
+  #     optional: false
+
+# Additional volumeMounts on the output Deployment definition.
+volumeMounts: []
+  # - name: foo
+  #   mountPath: "/etc/foo"
+  #   readOnly: true
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
