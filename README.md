@@ -1,6 +1,55 @@
 # MLOP proj1
 
-## Commands
+- [MLOP proj1](#mlop-proj1)
+	- [Installation](#installation)
+	- [Docker Build](#docker-build)
+	- [Kubernetes](#kubernetes)
+	- [helm chart](#helm-chart)
+	- [ArgoCD](#argocd)
+		- [Part 1 — Install ArgoCD into your local cluster](#part-1--install-argocd-into-your-local-cluster)
+		- [Part 2 — Install the ArgoCD CLI](#part-2--install-the-argocd-cli)
+		- [Part 3 — Expose the ArgoCD UI and log in](#part-3--expose-the-argocd-ui-and-log-in)
+			- [CLI login](#cli-login)
+			- [UI login](#ui-login)
+		- [Part 4 — Connect your GitHub repo](#part-4--connect-your-github-repo)
+			- [CLI (recommended)](#cli-recommended)
+			- [UI](#ui)
+		- [Part 5 — Create the ArgoCD Application](#part-5--create-the-argocd-application)
+			- [CLI](#cli)
+			- [UI](#ui-1)
+		- [Part 6 — Test the full CI/CD cycle end-to-end](#part-6--test-the-full-cicd-cycle-end-to-end)
+		- [The code change](#the-code-change)
+			- [Trigger the pipeline](#trigger-the-pipeline)
+		- [Watch it flow](#watch-it-flow)
+		- [Part 7 — Hit the app and see load balancing](#part-7--hit-the-app-and-see-load-balancing)
+			- [Option A — NodePort (simplest, no extra command needed)](#option-a--nodeport-simplest-no-extra-command-needed)
+			- [Option B — Port-forward to the Service (not a pod)](#option-b--port-forward-to-the-service-not-a-pod)
+		- [Part 8 — Useful commands for day-to-day](#part-8--useful-commands-for-day-to-day)
+	- [Prometheus + Grafana Setup](#prometheus--grafana-setup)
+		- [Step 1 — Update the app to expose metrics](#step-1--update-the-app-to-expose-metrics)
+			- [1a. Add to requirements.txt](#1a-add-to-requirementstxt)
+			- [1b. Replace main.py](#1b-replace-mainpy)
+		- [1c. Test it locally before doing anything else](#1c-test-it-locally-before-doing-anything-else)
+		- [Step 2 — Add a ServiceMonitor to the Helm chart](#step-2--add-a-servicemonitor-to-the-helm-chart)
+			- [2a. Create the file](#2a-create-the-file)
+			- [2b. Add to values.yaml](#2b-add-to-valuesyaml)
+			- [2c. Verify it renders correctly](#2c-verify-it-renders-correctly)
+			- [2d. Commit and push](#2d-commit-and-push)
+		- [Step 3 — Install Prometheus and Grafana](#step-3--install-prometheus-and-grafana)
+		- [Step 4 — Verify Prometheus is scraping your app](#step-4--verify-prometheus-is-scraping-your-app)
+		- [Step 5 — Open Grafana](#step-5--open-grafana)
+		- [Step 6 — Build a dashboard](#step-6--build-a-dashboard)
+			- [6a. Create a new dashboard](#6a-create-a-new-dashboard)
+			- [6b. Add Panel 1 — Request rate per pod](#6b-add-panel-1--request-rate-per-pod)
+		- [6c. Add Panel 2 — p95 latency](#6c-add-panel-2--p95-latency)
+			- [6d. Add Panel 3 — Total requests per pod](#6d-add-panel-3--total-requests-per-pod)
+			- [6e. Save the dashboard](#6e-save-the-dashboard)
+		- [6f. Generate traffic and watch the panels update](#6f-generate-traffic-and-watch-the-panels-update)
+		- [Quick reference — all port-forwards](#quick-reference--all-port-forwards)
+
+
+
+## Installation
 
 1. Uv env setup and run
 
@@ -460,12 +509,12 @@ kubectl exec -n funny \
 
 ---
 
-## Part 7 — Hit the app and see load balancing
+### Part 7 — Hit the app and see load balancing
 
 > Do not use `kubectl port-forward pod/<name>` — that tunnels directly to one pod
 > and bypasses the load balancer entirely. You will always see the same pod.
 
-### Option A — NodePort (simplest, no extra command needed)
+#### Option A — NodePort (simplest, no extra command needed)
 
 Docker Desktop automatically exposes NodePorts on `localhost`.
 
@@ -478,7 +527,7 @@ kubectl get svc -n funny
 for i in {1..9}; do curl -s http://localhost:<nodeport> | python3 -m json.tool; done
 ```
 
-### Option B — Port-forward to the Service (not a pod)
+#### Option B — Port-forward to the Service (not a pod)
 
 ```bash
 kubectl port-forward svc/hello-joker -n funny 8081:8083
@@ -502,7 +551,7 @@ Either option distributes across your 3 replicas:
 
 ---
 
-## Part 8 — Useful commands for day-to-day
+### Part 8 — Useful commands for day-to-day
 
 ```bash
 # Check app health and sync status
@@ -537,42 +586,30 @@ argocd app delete hello-joker --cascade
 ---
 
 ## Prometheus + Grafana Setup
-> Observability for hello-joker on Docker Desktop Kubernetes
+
+> Docker Desktop Kubernetes — step by step, nothing skipped
 
 ---
 
-### How it works
+What you will have at the end
 
 ```
-hello-joker pods
-  └── GET /metrics          ← exposed by prometheus-fastapi-instrumentator
-
-ServiceMonitor (CRD)
-  └── selects hello-joker Service by label
-  └── tells Prometheus Operator: "scrape these pods every 15s"
-
-Prometheus
-  └── reads ServiceMonitor → scrapes /metrics → stores time-series data
-
-Grafana
-  └── queries Prometheus via PromQL → renders dashboards
+hello-joker pods  →  /metrics endpoint
+                         ↑ scrapes every 15s
+                    Prometheus  →  Grafana dashboards
 ```
-
-The key piece is the **ServiceMonitor** — it's a Kubernetes custom resource installed
-by `kube-prometheus-stack`. Instead of editing Prometheus config files manually,
-you declare a ServiceMonitor and the Prometheus Operator picks it up automatically.
 
 ---
 
-### Part 1 — Update the app
+### Step 1 — Update the app to expose metrics
 
-#### 1a. Add the instrumentator to requirements.txt
+#### 1a. Add to requirements.txt
 
 ```
 prometheus-fastapi-instrumentator
 ```
 
-#### 1b. Update main.py
+#### 1b. Replace main.py
 
 ```python
 import os
@@ -584,9 +621,8 @@ app = FastAPI()
 
 POD_NAME = os.getenv("POD_NAME", "unknown-pod")
 
-# Exposes /metrics with standard HTTP metrics automatically.
-# Metrics: http_requests_total, http_request_duration_seconds,
-#          http_request_size_bytes, http_response_size_bytes
+# This single line adds /metrics to your app automatically.
+# Prometheus will scrape that endpoint to collect data.
 Instrumentator().instrument(app).expose(app)
 
 
@@ -599,18 +635,49 @@ async def root():
     }
 ```
 
-Test it locally before pushing:
+### 1c. Test it locally before doing anything else
 
 ```bash
 uv run uvicorn main:app --host 0.0.0.0 --port 8083
+```
+
+In a second terminal:
+
+```bash
 curl http://localhost:8083/metrics
-# You should see lines like:
-# http_requests_total{handler="/",method="GET",status="2xx"} 1.0
+```
+
+You should see output like this:
+
+```
+# HELP http_requests_total Total number of requests by method, status and handler.
+# TYPE http_requests_total counter
+http_requests_total{handler="/",method="GET",status="2xx"} 1.0
+```
+
+If you see that, the app side is done. Commit and push:
+
+```bash
+git add .
+git commit -m "feat: expose prometheus metrics"
+git push origin main
+```
+
+Wait for GitHub Actions to finish, merge the Helm PR, then run:
+
+```bash
+argocd app sync hello-joker
+kubectl rollout status deployment/hello-joker -n funny
 ```
 
 ---
 
-### Part 2 — Add the ServiceMonitor Helm template
+### Step 2 — Add a ServiceMonitor to the Helm chart
+
+A ServiceMonitor is how you tell Prometheus: "scrape this app."
+You don't edit Prometheus config files — you just create this resource.
+
+#### 2a. Create the file
 
 Create `k8s/hello-joker/templates/servicemonitor.yaml`:
 
@@ -620,12 +687,9 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: {{ include "hello-joker.fullname" . }}
-  namespace: {{ .Values.serviceMonitor.namespace | default .Release.Namespace }}
   labels:
     {{- include "hello-joker.labels" . | nindent 4 }}
-    # Must match kube-prometheus-stack's serviceMonitorSelector.
-    # The default selector is: matchLabels: {release: prometheus}
-    release: {{ .Values.serviceMonitor.prometheusRelease | default "prometheus" }}
+    release: prometheus
 spec:
   namespaceSelector:
     matchNames:
@@ -636,160 +700,206 @@ spec:
   endpoints:
     - port: http
       path: /metrics
-      interval: {{ .Values.serviceMonitor.interval | default "15s" }}
-      scrapeTimeout: {{ .Values.serviceMonitor.scrapeTimeout | default "10s" }}
+      interval: 15s
 {{- end }}
 ```
 
----
+#### 2b. Add to values.yaml
 
-### Part 3 — Add serviceMonitor to values.yaml
-
-Add this block to the bottom of `k8s/hello-joker/values.yaml`:
+Add this at the bottom of `k8s/hello-joker/values.yaml`:
 
 ```yaml
 serviceMonitor:
   enabled: true
-  prometheusRelease: prometheus   # must match your helm release name for kube-prometheus-stack
-  namespace: ""                   # defaults to app namespace (funny)
-  interval: 15s
-  scrapeTimeout: 10s
 ```
 
-Verify the template renders correctly:
+#### 2c. Verify it renders correctly
 
 ```bash
-helm template hello-joker k8s/hello-joker | grep -A20 "ServiceMonitor"
+helm template hello-joker k8s/hello-joker | grep -A5 "kind: ServiceMonitor"
+```
+
+You should see `kind: ServiceMonitor` in the output. If you see nothing, `enabled` is
+not being picked up — double-check the indentation in values.yaml.
+
+#### 2d. Commit and push
+
+```bash
+git add .
+git commit -m "feat: add servicemonitor for prometheus"
+git push origin main
+```
+
+Merge the Helm PR, then sync:
+
+```bash
+argocd app sync hello-joker
+```
+
+Confirm the ServiceMonitor exists in the cluster:
+
+```bash
+kubectl get servicemonitor -n funny
+# NAME          AGE
+# hello-joker   10s
 ```
 
 ---
 
-### Part 4 — Install kube-prometheus-stack
+### Step 3 — Install Prometheus and Grafana
 
-This single Helm chart installs Prometheus, Grafana, AlertManager, node exporters,
-and the Prometheus Operator (which reads ServiceMonitor CRDs) all at once.
+One Helm chart installs everything: Prometheus, Grafana, and the operator
+that reads your ServiceMonitor.
 
 ```bash
-# Add the community charts repo
+# Add the chart repository
 helm repo add prometheus-community \
   https://prometheus-community.github.io/helm-charts
 helm repo update
 
-# Install into the monitoring namespace
-# Release name MUST be "prometheus" to match serviceMonitor.prometheusRelease in values.yaml
+# Install — this takes about 2 minutes
 helm install prometheus prometheus-community/kube-prometheus-stack \
   --namespace monitoring \
   --create-namespace \
   --set grafana.adminPassword=admin123
 ```
 
-Wait for all pods to be Running (~2-3 minutes):
+Watch the pods start:
 
 ```bash
 kubectl get pods -n monitoring --watch
 ```
 
-You'll see pods for: prometheus, grafana, alertmanager, kube-state-metrics, node-exporter, operator.
+Wait until everything shows `Running`. You will see pods for:
+- `prometheus-kube-prometheus-prometheus-0`
+- `prometheus-grafana-*`
+- `prometheus-kube-prometheus-operator-*`
+- `prometheus-kube-state-metrics-*`
+- `prometheus-prometheus-node-exporter-*`
 
 ---
 
-### Part 5 — Push and let ArgoCD sync
+### Step 4 — Verify Prometheus is scraping your app
 
 ```bash
-git add main.py \
-  requirements.txt \
-  k8s/hello-joker/templates/servicemonitor.yaml \
-  k8s/hello-joker/values.yaml
-
-git commit -m "feat: add prometheus metrics and servicemonitor"
-git push origin main
+kubectl port-forward svc/prometheus-kube-prometheus-prometheus \
+  -n monitoring 9090:9090
 ```
 
-GitHub Actions will:
-1. Run tests
-2. Build and push new image with the instrumentator installed
-3. Open a Helm PR with the new image SHA
+Open http://localhost:9090
 
-Merge the PR, then sync ArgoCD:
+Click **Status → Targets** in the top menu.
+
+Look for a section called `serviceMonitor/funny/hello-joker`.
+All 3 pods should show state **UP**.
+
+If you don't see it yet, wait 1 minute and refresh — Prometheus polls
+for new ServiceMonitors every 60 seconds.
+
+Quick sanity check — run this query in the Prometheus search bar:
+
+```
+http_requests_total{job="hello-joker"}
+```
+
+Generate some traffic first so there's data to see:
 
 ```bash
-argocd app sync hello-joker
+for i in {1..20}; do curl -s http://localhost:<your-nodeport> > /dev/null; done
 ```
-
-Verify the ServiceMonitor was created:
-
-```bash
-kubectl get servicemonitor -n funny
-# NAME           AGE
-# hello-joker    30s
-```
-
-Verify Prometheus discovered the targets:
-
-```bash
-# Port-forward to the Prometheus UI
-kubectl port-forward svc/prometheus-kube-prometheus-prometheus -n monitoring 9090:9090
-```
-
-Open http://localhost:9090 → **Status → Targets**
-
-You should see `serviceMonitor/funny/hello-joker` with state `UP` for each pod.
-If it shows as `Unknown` or `Down`, check Part 7 Troubleshooting.
 
 ---
 
-### Part 6 — Access Grafana and build a dashboard
-
-#### Access
+### Step 5 — Open Grafana
 
 ```bash
-kubectl port-forward svc/prometheus-grafana -n monitoring 3000:80
+kubectl port-forward svc/prometheus-grafana \
+  -n monitoring 3000:80
 ```
 
 Open http://localhost:3000
+
 - Username: `admin`
-- Password: `admin123` (or whatever you set in `--set grafana.adminPassword`)
-
-#### Import the FastAPI dashboard
-
-The fastest way to get a useful dashboard is to import a pre-built one:
-
-1. In Grafana: click **Dashboards → Import**
-2. Enter dashboard ID: **17175** (FastAPI Observability)
-3. Click **Load**
-4. Select your Prometheus data source
-5. Click **Import**
-
-You'll immediately see request rate, latency percentiles, and error rate per endpoint.
-
-#### Key metrics to query manually (Explore → select Prometheus)
-
-```promql
-# Total requests per second across all pods
-rate(http_requests_total{job="hello-joker"}[1m])
-
-# Request rate broken down by pod (shows load balancing)
-rate(http_requests_total{job="hello-joker"}[1m]) by (pod)
-
-# 95th percentile latency
-histogram_quantile(0.95,
-  rate(http_request_duration_seconds_bucket{handler="/"}[5m])
-)
-
-# Error rate (non-2xx responses)
-rate(http_requests_total{job="hello-joker", status!~"2.."}[1m])
-
-# Requests per pod — confirms load is spread across your 3 replicas
-sum by (pod) (
-  increase(http_requests_total{job="hello-joker"}[5m])
-)
-```
-
-#### Generate some traffic to see the graphs fill in
-
-```bash
-# Hit the NodePort 200 times quickly
-for i in {1..200}; do curl -s http://localhost:<nodeport> > /dev/null; done
-```
+- Password: `admin123`
 
 ---
+
+### Step 6 — Build a dashboard
+
+#### 6a. Create a new dashboard
+
+Dashboards → New → New dashboard → **Add visualization**
+
+Select **Prometheus** as the data source.
+
+#### 6b. Add Panel 1 — Request rate per pod
+
+This shows your 3 pods handling traffic. You will see the load balancer
+distributing requests across them.
+
+In the query box, paste:
+
+```
+rate(http_requests_total{job="hello-joker"}[1m])
+```
+
+- Visualization: **Time series**
+- Title: `Request rate per pod`
+- In **Legend**, set format to `{{pod}}`
+- Click **Apply**
+
+### 6c. Add Panel 2 — p95 latency
+
+How long 95% of requests take.
+
+```
+histogram_quantile(0.95,
+  sum by (le) (
+    rate(http_request_duration_seconds_bucket{job="hello-joker"}[5m])
+  )
+)
+```
+
+- Visualization: **Time series**
+- Title: `p95 latency`
+- Unit: **seconds (s)** (find it under Standard options → Unit)
+- Click **Apply**
+
+#### 6d. Add Panel 3 — Total requests per pod
+
+Shows which pods are handling more load.
+
+```
+sum by (pod) (increase(http_requests_total{job="hello-joker"}[5m]))
+```
+
+- Visualization: **Bar gauge**
+- Title: `Requests per pod (last 5m)`
+- Click **Apply**
+
+#### 6e. Save the dashboard
+
+Click the **Save** icon (top right) → Name it `hello-joker` → Save.
+
+### 6f. Generate traffic and watch the panels update
+
+```bash
+# Run this and watch the Grafana panels update in real time
+for i in {1..200}; do curl -s http://localhost:<your-nodeport> > /dev/null; sleep 0.1; done
+```
+
+### Quick reference — all port-forwards
+
+```bash
+# Your app
+kubectl port-forward svc/hello-joker -n funny 8081:8083
+# → http://localhost:8081
+
+# Prometheus UI
+kubectl port-forward svc/prometheus-kube-prometheus-prometheus -n monitoring 9090:9090
+# → http://localhost:9090
+
+# Grafana
+kubectl port-forward svc/prometheus-grafana -n monitoring 3000:80
+# → http://localhost:3000  (admin / admin123)
+```
