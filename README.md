@@ -1,53 +1,51 @@
 # MLOP proj1
 
 - [MLOP proj1](#mlop-proj1)
-	- [Installation](#installation)
-	- [Docker Build](#docker-build)
-	- [Kubernetes](#kubernetes)
-	- [helm chart](#helm-chart)
-	- [ArgoCD](#argocd)
-		- [Part 1 — Install ArgoCD into your local cluster](#part-1--install-argocd-into-your-local-cluster)
-		- [Part 2 — Install the ArgoCD CLI](#part-2--install-the-argocd-cli)
-		- [Part 3 — Expose the ArgoCD UI and log in](#part-3--expose-the-argocd-ui-and-log-in)
-			- [CLI login](#cli-login)
-			- [UI login](#ui-login)
-		- [Part 4 — Connect your GitHub repo](#part-4--connect-your-github-repo)
-			- [CLI (recommended)](#cli-recommended)
-			- [UI](#ui)
-		- [Part 5 — Create the ArgoCD Application](#part-5--create-the-argocd-application)
-			- [CLI](#cli)
-			- [UI](#ui-1)
-		- [Part 6 — Test the full CI/CD cycle end-to-end](#part-6--test-the-full-cicd-cycle-end-to-end)
-		- [The code change](#the-code-change)
-			- [Trigger the pipeline](#trigger-the-pipeline)
-		- [Watch it flow](#watch-it-flow)
-		- [Part 7 — Hit the app and see load balancing](#part-7--hit-the-app-and-see-load-balancing)
-			- [Option A — NodePort (simplest, no extra command needed)](#option-a--nodeport-simplest-no-extra-command-needed)
-			- [Option B — Port-forward to the Service (not a pod)](#option-b--port-forward-to-the-service-not-a-pod)
-		- [Part 8 — Useful commands for day-to-day](#part-8--useful-commands-for-day-to-day)
-	- [Prometheus + Grafana Setup](#prometheus--grafana-setup)
-		- [Step 1 — Update the app to expose metrics](#step-1--update-the-app-to-expose-metrics)
-			- [1a. Add to requirements.txt](#1a-add-to-requirementstxt)
-			- [1b. Replace main.py](#1b-replace-mainpy)
-		- [1c. Test it locally before doing anything else](#1c-test-it-locally-before-doing-anything-else)
-		- [Step 2 — Add a ServiceMonitor to the Helm chart](#step-2--add-a-servicemonitor-to-the-helm-chart)
-			- [2a. Create the file](#2a-create-the-file)
-			- [2b. Add to values.yaml](#2b-add-to-valuesyaml)
-			- [2c. Verify it renders correctly](#2c-verify-it-renders-correctly)
-			- [2d. Commit and push](#2d-commit-and-push)
-		- [Step 3 — Install Prometheus and Grafana](#step-3--install-prometheus-and-grafana)
-		- [Step 4 — Verify Prometheus is scraping your app](#step-4--verify-prometheus-is-scraping-your-app)
-		- [Step 5 — Open Grafana](#step-5--open-grafana)
-		- [Step 6 — Build a dashboard](#step-6--build-a-dashboard)
-			- [6a. Create a new dashboard](#6a-create-a-new-dashboard)
-			- [6b. Add Panel 1 — Request rate per pod](#6b-add-panel-1--request-rate-per-pod)
-		- [6c. Add Panel 2 — p95 latency](#6c-add-panel-2--p95-latency)
-			- [6d. Add Panel 3 — Total requests per pod](#6d-add-panel-3--total-requests-per-pod)
-			- [6e. Save the dashboard](#6e-save-the-dashboard)
-		- [6f. Generate traffic and watch the panels update](#6f-generate-traffic-and-watch-the-panels-update)
-		- [Quick reference — all port-forwards](#quick-reference--all-port-forwards)
-
-
+  - [Installation](#installation)
+  - [Docker Build](#docker-build)
+  - [Kubernetes](#kubernetes)
+  - [helm chart](#helm-chart)
+  - [ArgoCD](#argocd)
+    - [Part 1 — Install ArgoCD into your local cluster](#part-1--install-argocd-into-your-local-cluster)
+    - [Part 2 — Install the ArgoCD CLI](#part-2--install-the-argocd-cli)
+    - [Part 3 — Expose the ArgoCD UI and log in](#part-3--expose-the-argocd-ui-and-log-in)
+      - [CLI login](#cli-login)
+      - [UI login](#ui-login)
+    - [Part 4 — Connect your GitHub repo](#part-4--connect-your-github-repo)
+      - [CLI (recommended)](#cli-recommended)
+      - [UI](#ui)
+    - [Part 5 — Create the ArgoCD Application](#part-5--create-the-argocd-application)
+      - [CLI](#cli)
+      - [UI](#ui-1)
+    - [Part 6 — Test the full CI/CD cycle end-to-end](#part-6--test-the-full-cicd-cycle-end-to-end)
+    - [The code change](#the-code-change)
+      - [Trigger the pipeline](#trigger-the-pipeline)
+    - [Watch it flow](#watch-it-flow)
+    - [Part 7 — Hit the app and see load balancing](#part-7--hit-the-app-and-see-load-balancing)
+      - [Option A — NodePort (simplest, no extra command needed)](#option-a--nodeport-simplest-no-extra-command-needed)
+      - [Option B — Port-forward to the Service (not a pod)](#option-b--port-forward-to-the-service-not-a-pod)
+    - [Part 8 — Useful commands for day-to-day](#part-8--useful-commands-for-day-to-day)
+  - [Prometheus + Grafana Setup](#prometheus--grafana-setup)
+    - [Step 1 — Update the app to expose metrics](#step-1--update-the-app-to-expose-metrics)
+      - [1a. Add to requirements.txt](#1a-add-to-requirementstxt)
+      - [1b. Replace main.py](#1b-replace-mainpy)
+    - [1c. Test it locally before doing anything else](#1c-test-it-locally-before-doing-anything-else)
+    - [Step 2 — Add a ServiceMonitor to the Helm chart](#step-2--add-a-servicemonitor-to-the-helm-chart)
+      - [2a. Create the file](#2a-create-the-file)
+      - [2b. Add to values.yaml](#2b-add-to-valuesyaml)
+      - [2c. Verify it renders correctly](#2c-verify-it-renders-correctly)
+      - [2d. Commit and push](#2d-commit-and-push)
+    - [Step 3 — Install Prometheus and Grafana](#step-3--install-prometheus-and-grafana)
+    - [Step 4 — Verify Prometheus is scraping your app](#step-4--verify-prometheus-is-scraping-your-app)
+    - [Step 5 — Open Grafana](#step-5--open-grafana)
+    - [Step 6 — Build a dashboard](#step-6--build-a-dashboard)
+      - [6a. Create a new dashboard](#6a-create-a-new-dashboard)
+      - [6b. Add Panel 1 — Request rate per pod](#6b-add-panel-1--request-rate-per-pod)
+    - [6c. Add Panel 2 — p95 latency](#6c-add-panel-2--p95-latency)
+      - [6d. Add Panel 3 — Total requests per pod](#6d-add-panel-3--total-requests-per-pod)
+      - [6e. Save the dashboard](#6e-save-the-dashboard)
+    - [6f. Generate traffic and watch the panels update](#6f-generate-traffic-and-watch-the-panels-update)
+    - [Quick reference — all port-forwards](#quick-reference--all-port-forwards)
 
 ## Installation
 
@@ -128,13 +126,13 @@ This involves the replicaCount, image-related information, and specifying the se
 ```yaml
 replicaCount: 3
 image:
-	repository: varunmallya/hello-joker
-	pullPolicy: IfNotPresent
-	tag: v1
+    repository: varunmallya/hello-joker
+    pullPolicy: IfNotPresent
+    tag: v1
 ..
 service:
-	type: NodePort
-	port: 8080
+    type: NodePort
+    port: 8080
 ```
 
 Once the values are modified we can try installing this chart *in namespace funny* by using the Helm install command
@@ -171,7 +169,6 @@ kubectl get all -n funny
 
 This shows all resources created by the Helm release in the `funny` namespace.
 
-
 2. Update the chart after changing `values.yaml`
 
 ```yml
@@ -193,7 +190,8 @@ helm upgrade hello-joker k8s/hello-joker -n funny
 Explanation:
 
 * `upgrade` → applies updates without uninstalling
-<!-- * `-f values.yaml` → uses your modified values -->
+  
+  <!-- * `-f values.yaml` → uses your modified values -->
 
 Optional: check the status after upgrade:
 
@@ -211,9 +209,7 @@ helm uninstall hello-joker -n funny
 
 This removes all resources created by this Helm release in the `funny` namespace.
 
-
 ## ArgoCD
-
 
 ### Part 1 — Install ArgoCD into your local cluster
 
@@ -231,6 +227,7 @@ kubectl get pods -n argocd --watch
 ```
 
 You should see these pods all `Running`:
+
 - `argocd-server-*`
 - `argocd-repo-server-*`
 - `argocd-application-controller-*`
@@ -286,6 +283,7 @@ argocd login localhost:8443 \
 #### UI login
 
 Open https://localhost:8443 in your browser (accept the certificate warning), then log in with:
+
 - Username: `admin`
 - Password: the value from the secret above
 
@@ -461,6 +459,7 @@ git push origin main
 **Step 1 — GitHub Actions**
 
 Go to your repo → **Actions** tab. Three jobs run in sequence:
+
 - `test` → runs pytest
 - `build` → builds and pushes `devhellosr/hello-joker:<sha>` to Docker Hub
 - `update` → opens a PR like `helm/<sha>` that bumps the tag in `values.yaml`
@@ -771,6 +770,7 @@ kubectl get pods -n monitoring --watch
 ```
 
 Wait until everything shows `Running`. You will see pods for:
+
 - `prometheus-kube-prometheus-prometheus-0`
 - `prometheus-grafana-*`
 - `prometheus-kube-prometheus-operator-*`
